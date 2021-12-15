@@ -1,2 +1,2 @@
 #!/bin/bash
-cp -r /mnt/c/Users/erict/Mbed\ Programs/Mbed_Bikesla_/source/* ./source
+cp -r /mnt/c/Users/erict/Mbed\ Programs/Bikesla_m0/source/* ./source

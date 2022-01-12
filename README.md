@@ -11,5 +11,5 @@ cd Bikesla
 cp source/* MbedFolder/source/
 cp mbed_app.json MbedFolder
 ```
-7. change mini_printf to std if needs.
+7. change mini_printf to std if needs. (in mbed-os/targets/targets.json::19)
 8. f

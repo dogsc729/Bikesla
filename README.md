@@ -11,4 +11,4 @@ Gap::AddressType_t ---> ble::own_address_type_t
 GAP::Phy_t ---> ble::phy_t  
 4. rm -r shields img  
 5. copy source/* mbed_app.json  
-
+6. change mini_printf to std if needs.

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <cstdint>
+#include <ctime>
 #include <events/mbed_events.h>
 
 #include <mbed.h>
@@ -23,52 +24,108 @@
 #include "pretty_printer.h"
 
 #include "LEDService.h"
-#include "LED.h"
+#include "BuzzerService.h"
+#include "MotionService.h"
+
+#include "stm32l475e_iot01_accelero.h"
 
 
-#include "ButtonService.h"
+const static char DEVICE_NAME[] = "Bikesla T1";
 
+static EventQueue event_queue(100 * EVENTS_EVENT_SIZE);
 
-const static char DEVICE_NAME[] = "FuckYouDontConnect";
+PwmOut pwmOut_led(PA_15);
+PwmOut pwmOut_buzzer(PA_2);
+AnalogIn aIn_hall(A0);
 
-static EventQueue event_queue(/* event count */ 10 * EVENTS_EVENT_SIZE);
-
-int32_t led_state_init = 2400;
-int32_t led_state_try = 3311;
-PwmOut pwmOut_front_led(PA_15);
-
-class BatteryDemo : ble::Gap::EventHandler {
+class Bikesla : ble::Gap::EventHandler {
 public:
-    BatteryDemo(BLE &ble, events::EventQueue &event_queue) :
+    Bikesla(BLE &ble, events::EventQueue &event_queue) :
         _ble(ble),
         _event_queue(event_queue),
-        _led1(LED1, 1),
         _led2(LED2, 0),
         _button(BLE_BUTTON_PIN_NAME, BLE_BUTTON_PIN_PULL),
-        _button_service(NULL),
-        _button_uuid(ButtonService::BUTTON_SERVICE_UUID),
         _led_service(NULL),
-        _led_uuid(LEDService::LED_SERVICE_UUID),
-        _front_led(NULL),
-        _adv_data_builder(_adv_buffer) { }
+        _led_uuid(LEDService::SERVICE_UUID),
+        _buzzer_service(NULL),
+        _buzzer_uuid(BuzzerService::SERVICE_UUID),
+        _motion_service(NULL),
+        _motion_uuid(MotionService::SERVICE_UUID),
+        _adv_data_builder(_adv_buffer)
+        // _pDataXYZ(NULL),
+        {
+            _initialTime = clock();
+            _t_start = clock();
+            _hall_update = false;
+        }
 
     void start() {
-        _front_led = new LED();
-
         _ble.gap().setEventHandler(this);
+        _ble.init(this, &Bikesla::on_init_complete);
 
-        _ble.init(this, &BatteryDemo::on_init_complete);
+        pwmOut_led.period_ms(LED_PWM_PERIOD);
+        pwmOut_buzzer.period_ms(BUZZER_PWM_PERIOD);
 
-        _event_queue.call_every(500, this, &BatteryDemo::blink);
+        // _pDataXYZ = new int16_t[3] {0};
+        // _event_queue.call_every(ACC_SAMPLE_T, this, &Bikesla::sync_acc_xyz);
 
+        _event_queue.call_every(LED_CYCLE_MAX, this, &Bikesla::front_blink);
+        
+        _event_queue.call_every(SPEED_SAMPLE_T, this, &Bikesla::checkHall);
+        
         _event_queue.dispatch_forever();
     }
 
 private:
-    void sync_front_led(void) {
-        pwmOut_front_led.period_ms(_front_led->get_pwm_period());
-        pwmOut_front_led.write(_front_led->get_pwm_duty_s());
+    void sync_led(void) {
+        pwmOut_led.write(_led_service->getLightnessPercentage());
     }
+    void sync_buzzer(void) {
+        pwmOut_buzzer.write(_buzzer_service->getVolumePercentage());
+    }
+    void buzzer_ring(void) {
+        pwmOut_buzzer.write(0.8);
+    }
+    void buzzer_mute(void) {
+        pwmOut_buzzer.write(0);
+    }
+    void led_blink(int ms) {
+        for (int i=0; i<ms; i+=500) {
+            pwmOut_led.write(0.99);
+            ThisThread::sleep_for(std::chrono::milliseconds(300));
+            pwmOut_led.write(0);
+            ThisThread::sleep_for(std::chrono::milliseconds(200));
+        }
+    }
+
+
+    void checkHall(void) {
+        _hall_value = aIn_hall.read();
+        // _event_queue.call(printf, "%lf\n", _hall_value);
+        if (_hall_value < 0.77 | _hall_value > 0.83) {
+            if (_hall_update) return;
+            _hall_update = true;
+            // _event_queue.call(printf, "Hall value %lf\n", _hall_value);
+            clock_t t_end = clock();
+            double t = double((t_end - _t_start)) / CLOCKS_PER_SEC;
+            int32_t new_speed = int32_t(((CIRCUMFERENCE)/t) * 3600);
+            _event_queue.call(printf, "speed %d\n", new_speed);
+            _motion_service->updateSpeed(new_speed);
+            if (_motion_service->locked()) {
+                if (_motion_service->unsafeMove()) {
+                    buzzer_ring();
+                    // _event_queue.call(_buzzer_service->updateState, 5021);
+                }
+            }
+            _t_start = clock();
+        } else {
+            _hall_update = false;
+        }
+    }
+
+    // void sync_acc_xyz(void) {
+    //     BSP_ACCELERO_AccGetXYZ(_pDataXYZ);
+    // }
 
     /** Callback triggered when the ble initialization process has finished */
     void on_init_complete(BLE::InitializationCompleteCallbackContext *params) {
@@ -80,15 +137,14 @@ private:
         print_mac_address();
 
         /* Setup primary service. */
+        _led_service = new LEDService(_ble, 5000);
+        _buzzer_service = new BuzzerService(_ble, 5000);
+        _motion_service = new MotionService(_ble, 0, 0);
 
-        _button_service = new ButtonService(_ble, false);
+        _ble.gattServer().onDataWritten(this, &Bikesla::onDataWritten);
 
-        _led_service = new LEDService(_ble, led_state_init);
-
-        _ble.gattServer().onDataWritten(this, &BatteryDemo::onDataWritten);
-
-        _button.fall(Callback<void()>(this, &BatteryDemo::button_pressed));
-        _button.rise(Callback<void()>(this, &BatteryDemo::button_released));
+        _button.fall(Callback<void()>(this, &Bikesla::button_pressed));
+        _button.rise(Callback<void()>(this, &Bikesla::button_released));
 
         start_advertising();
     }
@@ -102,7 +158,7 @@ private:
         );
 
         _adv_data_builder.setFlags();
-        _adv_data_builder.setLocalServiceList(mbed::make_Span(&_button_uuid, 1));
+        _adv_data_builder.setLocalServiceList(mbed::make_Span(&_led_uuid, 1));
         _adv_data_builder.setName(DEVICE_NAME);
 
         /* Setup advertising */
@@ -138,41 +194,46 @@ private:
     }
 
     void button_pressed(void) {
-        _event_queue.call(Callback<void(bool)>(_button_service, &ButtonService::updateButtonState), true);
-
-        // _event_queue.call(Callback<void(int32_t)>(_led_service, &LEDService::updateLEDState), led_state_try);
-        // _front_led->next_flash_mode();
-        _event_queue.call(printf, "status: %d, flash_mode: %d\n", _front_led->get_status(), _front_led->get_flash_mode());
-        _event_queue.call(printf, "pwm_duty: %d, pwm_period: %d\n", _front_led->get_pwm_duty(), _front_led->get_pwm_period());
+        _event_queue.call(printf, "LED: %d\n", _led_service->getState());
+        _event_queue.call(printf, "Buzzer: %d\n", _buzzer_service->getState());
+        _event_queue.call(printf, "Motion: %d\n", _motion_service->getState());
 
         _led2 = !_led2;
+        if (_motion_service->locked()) {
+            _motion_service->updateState(1);
+        } else {
+            _motion_service->updateState(0);
+        }
     }
 
     void button_released(void) {
-        _event_queue.call(Callback<void(bool)>(_button_service, &ButtonService::updateButtonState), false);
+        return;
     }
 
+    void front_blink(void) {
+        int current_state = _led_service->getStatus();
+        if (current_state == 0) {
+            return;
+        } else if (current_state == 1) {
+            if (_led_service->getLightness() > 0) {
+                int t_on = _led_service->getT_on();
+                int t_off = _led_service->getT_off();
+                int duty = _led_service->getLightnessPercentage();
 
-    void blink(void) {
-        _led1 = !_led1;
+                int loop = LED_CYCLE_MAX / _led_service->getT_cycle();
+                for (int i=0; i<loop; ++i) {
+                    pwmOut_led.write(duty);
+                    ThisThread::sleep_for(std::chrono::milliseconds(t_on));
+                    pwmOut_led.write(0);
+                    ThisThread::sleep_for(std::chrono::milliseconds(t_off));
+                }
+                pwmOut_led.write(duty);
+            }
+        } else if (current_state == 2) {
+            // find bike
+            led_blink(2000);
+        }
     }
-
-    // void front_blink(void) {
-    //     if (_front_led->get_status() && _front_led->get_pwm_duty() > 0) {
-    //         int sleep_time = _front_led->get_cycle() - _front_led->get_t_on();
-    //         if (sleep_time > 0) {
-    //             int loop = LED_CYCLE_MAX / _front_led->get_cycle();
-    //             sync_front_led();
-
-    //             for (int i=0; i<loop; ++i) {
-    //                 ThisThread::sleep_for(std::chrono::milliseconds( _front_led->get_t_on()));
-    //                 _front_led->turn_off();
-    //                 ThisThread::sleep_for(std::chrono::milliseconds(sleep_time));
-    //                 _front_led->turn_on();
-    //             }
-    //         }
-    //     }
-    // }
 
 private:
     /* Event handler */
@@ -182,10 +243,16 @@ private:
     }
 
     virtual void onDataWritten(const GattWriteCallbackParams *params) {
-        _event_queue.call(printf, "onDataWritten() !!\n");
-        if ((params->handle == _led_service->getValueHandle()) && (params->len >= 2)) {
-            _event_queue.call(printf, "received: %d\n", *(uint16_t*)(params->data));
-            _front_led->ble_set_int(*(uint16_t*)(params->data));
+        // _event_queue.call(printf, "onDataWritten() !!\n");
+        if ((params->handle == _motion_service->getValueHandle()) && (params->len >= 2)) {
+            _event_queue.call(printf, "received motion value: %d\n", *(uint16_t*)(params->data));
+            _motion_service->updateState(*(uint16_t*)(params->data));
+        } else if ((params->handle == _led_service->getValueHandle()) && (params->len >= 2)) {
+            _event_queue.call(printf, "received LED value: %d\n", *(uint16_t*)(params->data));
+            _led_service->updateState(*(uint16_t*)(params->data));
+        } else if ((params->handle == _buzzer_service->getValueHandle()) && (params->len >= 2)) {
+            _event_queue.call(printf, "received buzzer value: %d\n", *(uint16_t*)(params->data));
+            _buzzer_service->updateState(*(uint16_t*)(params->data));
         }
     }
 
@@ -193,15 +260,25 @@ private:
     BLE &_ble;
     events::EventQueue &_event_queue;
 
-    DigitalOut  _led1;
+    clock_t _initialTime;
+
     DigitalOut  _led2;
     InterruptIn _button;
-    ButtonService *_button_service;
-    LEDService *_led_service;
-    LED *_front_led;
 
-    UUID _button_uuid;
+    LEDService *_led_service;
     UUID _led_uuid;
+
+    BuzzerService *_buzzer_service;
+    UUID _buzzer_uuid;
+
+    MotionService *_motion_service;
+    UUID _motion_uuid;
+
+    // int16_t *_pDataXYZ;
+
+    clock_t _t_start;
+    double _hall_value;
+    bool _hall_update;
 
     uint8_t _adv_buffer[ble::LEGACY_ADVERTISING_MAX_SIZE];
     ble::AdvertisingDataBuilder _adv_data_builder;
@@ -217,8 +294,8 @@ int main()
     BLE &ble = BLE::Instance();
     ble.onEventsToProcess(schedule_ble_events);
 
-    BatteryDemo demo(ble, event_queue);
-    demo.start();
+    Bikesla bikesla(ble, event_queue);
+    bikesla.start();
 
     return 0;
 }

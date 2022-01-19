@@ -1,6 +1,10 @@
 #ifndef __BLE_Motion_SERVICE_H__
 #define __BLE_Motion_SERVICE_H__
 
+#include "ble/BLE.h"
+#include "ble/Gap.h"
+#include "ble/GattServer.h"
+
 #include <cstdint>
 #include <string>
 
@@ -15,7 +19,7 @@ public:
     const static uint16_t STATE_CHARACTERISTIC_UUID = 0xD001;
     const static uint16_t SPEED_CHARACTERISTIC_UUID = 0xD002;
 
-    MotionService(BLE &_ble, int32_t initState, int32_t initSpeed) :
+    MotionService(BLE &_ble, int32_t initState = 200, int32_t initSpeed = 0) :
         ble(_ble),
         state(initState),
         stateChar(STATE_CHARACTERISTIC_UUID, &initState),
@@ -60,20 +64,26 @@ public:
     int32_t getPatience() { return state / 10; }
     bool locked() { return getStatus() == 0; }
 
+    void setState(int32_t new_state) {
+        state = new_state;
+    }
     void setStatus(int32_t new_status) {
         int32_t new_state = getPatience() * 10;
         new_state += new_status % 10;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
     void setPatience(int32_t new_patience) {
         int32_t new_state = getStatus();
         new_state += new_patience * 10;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
 
     bool unsafeMove() {
         int32_t patience = getPatience();
-        updateState(state - 10);
+        setState(state - 10);
+        // updateState(state - 10);
         return patience < 10;
     }
 

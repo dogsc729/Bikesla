@@ -1,20 +1,26 @@
 #ifndef __BLE_BUZZER_SERVICE_H__
 #define __BLE_BUZZER_SERVICE_H__
 
-#define BUZZER_PWM_PERIOD 100
+#include "ble/BLE.h"
+#include "ble/Gap.h"
+#include "ble/GattServer.h"
+#include <cstdint>
+
+#define BUZZER_PWM_PERIOD 10
+#define BUZZER_CYCLE_MAX 2000
 
 const static int BUZZER_MODE[10][2] {
     // cycle, t_on
+    {2000, 2000},
+    {2000, 1500},
+    {2000, 1000},
+    {2000, 500},
     {1000, 800},
     {1000, 500},
-    {1000, 300},
     {1000, 200},
-    {1000, 100},
+    {500, 400},
     {500, 300},
-    {500, 200},
-    {500, 100},
-    {200, 100},
-    {100, 50}
+    {300, 100}
 };
 
 
@@ -40,6 +46,7 @@ public:
     }
 
     void updateState(int32_t newState) {
+        newState = newState % 10000;
         state = newState;
         ble.gattServer().write(
             stateChar.getValueHandle(),
@@ -53,22 +60,32 @@ public:
     int32_t getMode() { return (state / 10) % 10; }
     int32_t getVolume() { return (state / 100) % 100; }
     float getVolumePercentage() { return float(getVolume()) / 100; }
+
+    int getT_cycle() { return BUZZER_MODE[getMode()][0]; }
+    int getT_on() { return BUZZER_MODE[getMode()][1]; }
+    int getT_off() { return BUZZER_MODE[getMode()][0] - BUZZER_MODE[getMode()][1]; }
     
-    void set_status(int32_t new_status) {
+    void setState(int32_t new_state) { state = new_state; }
+    void setStatus(int32_t new_status) {
         int32_t new_state = getMode()*10 + getVolume()*100;
         new_state += new_status % 10;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
-    void set_mode(int32_t new_mode) {
+    void setMode(int32_t new_mode) {
         int32_t new_state = getStatus() + getVolume()*100;
         new_state += (new_mode % 10) * 10;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
-    void set_volume(int32_t new_volume) {
+    void setVolume(int32_t new_volume) {
         int32_t new_state = getStatus() + getMode()*10;
         new_state += (new_volume % 100) * 100;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
+
+
 
 private:
     BLE                                 &ble;

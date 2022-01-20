@@ -1,6 +1,10 @@
 #ifndef __BLE_LED_SERVICE_H__
 #define __BLE_LED_SERVICE_H__
 
+#include "ble/BLE.h"
+#include "ble/Gap.h"
+#include "ble/GattServer.h"
+
 #include <cstdint>
 #include <string>
 
@@ -17,8 +21,8 @@ static int LED_MODE[10][2] {
     {1000, 500},
     {1000, 200},
     {500, 300},
-    {500, 100},
-    {200, 100}
+    {200, 100},
+    {100, 50}
 };
 
 class LEDService {
@@ -43,34 +47,39 @@ public:
     }
 
     void updateState(int32_t newState) {
+        newState = newState % 10000;
         state = newState;
         ble.gattServer().write(
             stateChar.getValueHandle(),
             (uint8_t *)&newState,
-            sizeof(int32_t))
-        ;
+            sizeof(int32_t)
+        );
     }
 
     int32_t getState() { return state; }
     int32_t getStatus() { return state % 10; }
     int32_t getMode() { return (state / 10) % 10; }
     int32_t getLightness() { return (state / 100) % 100; }
-    float getLightnessPercentage() { return float(getLightness()) / 100; }
+    float getLightnessPercentage() { return float(getLightness()) / 100.0; }
     
+    void setState(int32_t new_state) { state = new_state; }
     void setStatus(int32_t new_status) {
         int32_t new_state = getMode()*10 + getLightness()*100;
         new_state += new_status % 10;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
     void setMode(int32_t new_mode) {
         int32_t new_state = getStatus() + getLightness()*100;
         new_state += new_mode % 10;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
     void setLightness(int32_t new_lightness) {
         int32_t new_state = getStatus() + getMode()*10;
         new_state += new_lightness % 100;
-        updateState(new_state);
+        setState(new_state);
+        // updateState(new_state);
     }
 
 
@@ -95,7 +104,7 @@ private:
     BLE                                 &ble;
     ReadWriteGattCharacteristic<int32_t>   stateChar;
 
-    int state;
+    int32_t state;
 };
  
 #endif

@@ -34,7 +34,7 @@
 
 const static char DEVICE_NAME[] = "Bikesla T1";
 
-static EventQueue event_queue(100 * EVENTS_EVENT_SIZE);
+static EventQueue event_queue(1000 * EVENTS_EVENT_SIZE);
 
 PwmOut pwmOut_led(PA_15);
 PwmOut pwmOut_buzzer(PA_2);
@@ -88,7 +88,7 @@ public:
         
         _event_queue.call_every(SPEED_SAMPLE_T, this, &Bikesla::checkHall);
 
-        _event_queue.call_every(1000, this, &Bikesla::syncSpeed);
+        _event_queue.call_every(2000, this, &Bikesla::syncSpeed);
         
         _event_queue.dispatch_forever();
     }
@@ -152,7 +152,7 @@ private:
             // _event_queue.call(printf, "Hall value %lf\n", _hall_value);
             clock_t t_end = clock();
             double t = double((t_end - _t_start)) / CLOCKS_PER_SEC;
-            // if (t > 0.2) {
+            if (t > 0.3) {
                 int32_t new_speed = int32_t(((CIRCUMFERENCE)/t) * 3600);
                 _event_queue.call(printf, "speed %d\n", new_speed);
                 if (new_speed < 60) {
@@ -164,17 +164,23 @@ private:
                             // _event_queue.call(_buzzer_service->updateState, 5021);
                         }
                     } else {
-                        if (new_speed > 30) {
+                        if (new_speed > 20) {
                             _limit_update = true;
-                            _buzzer_service->setState(8011);
+                            buzzer_ring();
+                            ThisThread::sleep_for(std::chrono::milliseconds(2000));
+                            buzzer_mute();
+                            // _buzzer_service->setState(8011);
                         } else if (_limit_update) {
                             _limit_update = false;
-                            _buzzer_service->setState(8010);
+                            // _buzzer_service->setState(8010);
+                            buzzer_ring();
+                            ThisThread::sleep_for(std::chrono::milliseconds(2000));
+                            buzzer_mute();
                         }
                     }
                 }
-                _t_start = clock();
-            // }
+            }
+            _t_start = clock();
         } else {
             _hall_update = false;
         }
@@ -184,9 +190,12 @@ private:
         BSP_ACCELERO_AccGetXYZ(_pDataXYZ);
         // printf("%d %d %d\n", _pDataXYZ[0], _pDataXYZ[1], _pDataXYZ[2]);
         int tmpStatus = _buzzer_service->getStatus();
-        if (_pDataXYZ[2] < 500) {
+        if (_pDataXYZ[2] < 600) {
             if (_fall_update) return;
-            _buzzer_service->setStatus(2);
+            // _buzzer_service->setStatus(2);
+            buzzer_ring();
+            ThisThread::sleep_for(std::chrono::milliseconds(2000));
+            buzzer_mute();
             // printf("!!!!!!!\n");
             _fall_update = true;
         } else {

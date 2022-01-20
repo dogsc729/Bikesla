@@ -56,12 +56,11 @@ public:
         _adv_data_builder(_adv_buffer),
         _pDataXYZ(NULL)
         {
-            _initialTime = clock();
             _t_start = clock();
             _hall_update = false;
             _fall_update = false;
             _limit_update = false;
-            _speed = 0;
+            _curr_speed = 0;
             BSP_ACCELERO_Init();
 
             float sum = 0;
@@ -141,7 +140,7 @@ private:
     }
 
     void syncSpeed(void) {
-        _motion_service->updateSpeed(_speed);
+        _motion_service->updateSpeed(_curr_speed);
     }
 
     void checkHall(void) {
@@ -158,7 +157,7 @@ private:
                 _event_queue.call(printf, "speed %d\n", new_speed);
                 if (new_speed < 60) {
                     // _motion_service->updateSpeed(new_speed);
-                    _speed = new_speed;
+                    _curr_speed = new_speed;
                     if (_motion_service->locked()) {
                         if (_motion_service->unsafeMove()) {
                             buzzer_ring();
@@ -268,7 +267,7 @@ private:
         _event_queue.call(printf, "Motion: %d\n", _motion_service->getState());
         _event_queue.call(printf, "speed: %d\n", _motion_service->getSpeed());
         _led2 = !_led2;
-        _speed += 2;
+        _curr_speed += 2;
         // if (_motion_service->locked()) {
         //     _motion_service->updateState(1);
         // } else {
@@ -336,8 +335,6 @@ private:
     BLE &_ble;
     events::EventQueue &_event_queue;
 
-    clock_t _initialTime;
-
     DigitalOut  _led2;
     InterruptIn _button;
 
@@ -350,7 +347,7 @@ private:
     MotionService *_motion_service;
     UUID _motion_uuid;
 
-    int _speed;
+    int _curr_speed;
 
     int16_t *_pDataXYZ;
 

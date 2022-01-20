@@ -38,7 +38,7 @@ static EventQueue event_queue(100 * EVENTS_EVENT_SIZE);
 
 PwmOut pwmOut_led(PA_15);
 PwmOut pwmOut_buzzer(PA_2);
-AnalogIn aIn_hall(A0);
+AnalogIn aIn_hall(A1);
 
 class Bikesla : ble::Gap::EventHandler {
 public:
@@ -53,13 +53,26 @@ public:
         _buzzer_uuid(BuzzerService::SERVICE_UUID),
         _motion_service(NULL),
         _motion_uuid(MotionService::SERVICE_UUID),
-        _adv_data_builder(_adv_buffer)
-        // _pDataXYZ(NULL),
+        _adv_data_builder(_adv_buffer),
+        _pDataXYZ(NULL)
         {
             _initialTime = clock();
             _t_start = clock();
             _hall_update = false;
-            tmp_speeds.clear();
+            _fall_update = false;
+            _limit_update = false;
+            _speed = 0;
+            BSP_ACCELERO_Init();
+
+            float sum = 0;
+            for (int i=0; i<50; ++i) {
+                sum += aIn_hall.read();
+                ThisThread::sleep_for(std::chrono::milliseconds(10));
+            }
+            sum = sum / 50.0;
+            printf("sum = %f\n", sum);
+            _hall_value_lower = sum - 0.07;
+            _hall_value_upper = sum + 0.07;
         }
 
     void start() {
@@ -69,13 +82,15 @@ public:
         pwmOut_led.period_ms(LED_PWM_PERIOD);
         pwmOut_buzzer.period_ms(BUZZER_PWM_PERIOD);
 
-        // _pDataXYZ = new int16_t[3] {0};
-        // _event_queue.call_every(ACC_SAMPLE_T, this, &Bikesla::sync_acc_xyz);
+        _pDataXYZ = new int16_t[3] {0};
+        _event_queue.call_every(ACC_SAMPLE_T, this, &Bikesla::checkAcc);
 
         _event_queue.call_every(LED_CYCLE_MAX, this, &Bikesla::front_blink);
         
         _event_queue.call_every(SPEED_SAMPLE_T, this, &Bikesla::checkHall);
 
+        _event_queue.call_every(1000, this, &Bikesla::syncSpeed);
+        
         _event_queue.dispatch_forever();
     }
 
@@ -125,26 +140,25 @@ private:
         }
     }
 
-    void et_try(void) {
-        int32_t curr_speed = _motion_service->getSpeed();
-        _motion_service->updateSpeed(curr_speed + 1);
+    void syncSpeed(void) {
+        _motion_service->updateSpeed(_speed);
     }
-
 
     void checkHall(void) {
         _hall_value = aIn_hall.read();
         // _event_queue.call(printf, "%lf\n", _hall_value);
-        if (_hall_value < 0.77 | _hall_value > 0.83) {
+        if (_hall_value < _hall_value_lower | _hall_value > _hall_value_upper) {
             if (_hall_update) return;
             _hall_update = true;
             // _event_queue.call(printf, "Hall value %lf\n", _hall_value);
             clock_t t_end = clock();
             double t = double((t_end - _t_start)) / CLOCKS_PER_SEC;
-            if (t > 0.01) {
+            // if (t > 0.2) {
                 int32_t new_speed = int32_t(((CIRCUMFERENCE)/t) * 3600);
-                // _event_queue.call(printf, "speed %d\n", new_speed);
-                if (new_speed < 100) {
-                    _motion_service->updateSpeed(new_speed);
+                _event_queue.call(printf, "speed %d\n", new_speed);
+                if (new_speed < 60) {
+                    // _motion_service->updateSpeed(new_speed);
+                    _speed = new_speed;
                     if (_motion_service->locked()) {
                         if (_motion_service->unsafeMove()) {
                             buzzer_ring();
@@ -152,20 +166,35 @@ private:
                         }
                     } else {
                         if (new_speed > 30) {
+                            _limit_update = true;
                             _buzzer_service->setState(8011);
+                        } else if (_limit_update) {
+                            _limit_update = false;
+                            _buzzer_service->setState(8010);
                         }
                     }
                 }
-            }
-            _t_start = clock();
+                _t_start = clock();
+            // }
         } else {
             _hall_update = false;
         }
     }
 
-    // void sync_acc_xyz(void) {
-    //     BSP_ACCELERO_AccGetXYZ(_pDataXYZ);
-    // }
+    void checkAcc(void) {
+        BSP_ACCELERO_AccGetXYZ(_pDataXYZ);
+        // printf("%d %d %d\n", _pDataXYZ[0], _pDataXYZ[1], _pDataXYZ[2]);
+        int tmpStatus = _buzzer_service->getStatus();
+        if (_pDataXYZ[2] < 500) {
+            if (_fall_update) return;
+            _buzzer_service->setStatus(2);
+            // printf("!!!!!!!\n");
+            _fall_update = true;
+        } else {
+            _buzzer_service->setStatus(tmpStatus);
+            _fall_update = false;
+        }
+    }
 
     /** Callback triggered when the ble initialization process has finished */
     void on_init_complete(BLE::InitializationCompleteCallbackContext *params) {
@@ -238,8 +267,8 @@ private:
         _event_queue.call(printf, "Buzzer: %d\n", _buzzer_service->getState());
         _event_queue.call(printf, "Motion: %d\n", _motion_service->getState());
         _event_queue.call(printf, "speed: %d\n", _motion_service->getSpeed());
-        _event_queue.call(this, &Bikesla::et_try);
         _led2 = !_led2;
+        _speed += 2;
         // if (_motion_service->locked()) {
         //     _motion_service->updateState(1);
         // } else {
@@ -321,13 +350,18 @@ private:
     MotionService *_motion_service;
     UUID _motion_uuid;
 
-    std::vector<int> tmp_speeds;
+    int _speed;
 
-    // int16_t *_pDataXYZ;
+    int16_t *_pDataXYZ;
 
     clock_t _t_start;
     double _hall_value;
     bool _hall_update;
+    double _hall_value_lower;
+    double _hall_value_upper;
+
+    bool _fall_update;
+    bool _limit_update;
 
     uint8_t _adv_buffer[ble::LEGACY_ADVERTISING_MAX_SIZE];
     ble::AdvertisingDataBuilder _adv_data_builder;

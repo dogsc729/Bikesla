@@ -8,10 +8,10 @@
 #include <cstdint>
 #include <string>
 
-#define SPEED_SAMPLE_T 10
-#define ACC_SAMPLE_T 100
+#define SPEED_SAMPLE_T 20
+#define ACC_SAMPLE_T 1000
 
-#define CIRCUMFERENCE 2 * 3.14159 * 0.0006
+#define CIRCUMFERENCE 2 * 3.14159 * 0.00035
 
 class MotionService {
 public:
